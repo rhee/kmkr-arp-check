@@ -1,0 +1,82 @@
+#!/bin/sh
+
+if [ -z "$1" ] ; then
+  echo "Usage: $0 <mailto> [<mailfrom>]" 1>&2
+  exit 1
+fi
+
+hostname="$(hostname)"
+MAILTO="$1"
+MAILFROM="${2-arp-check@$hostname}"
+
+# check arp-scan
+if [ -x /usr/bin/arp-scan ]; then
+  ARPSCAN=/usr/bin/arp-scan
+fi
+if [ -x /usr/sbin/arp-scan ]; then
+  ARPSCAN=/usr/sbin/arp-scan
+fi
+
+if [ -z "$ARPSCAN" ]; then
+  echo arp-scan not found 1>&2
+  exit 1
+fi
+
+mkdir -p /opt/kmkr-arp-check/var/lib
+
+database=/opt/kmkr-arp-check/var/lib/arp-list.txt
+
+tmpscan=/tmp/arp-check-tmpscan.$$.txt
+trace=/tmp/arp-check-trace.$$.txt
+report=/tmp/arp-check-report.$$.txt
+mailcompose=/tmp/arp-check-mailcompose.$$.txt
+
+mynet=$(/sbin/ifconfig eth0 |sed -n -e 's/^.*inet addr:\([0-9]\{1,3\}[.][0-9]\{1,3\}[.][0-9]\{1,3\}[.]\).*$/\1/p')
+mynetE=$(echo $mynet |sed -e 's/\./[.]/g')
+nP='s/^\('$mynetE'[0-9]\{1,3\}\).*$/\1/p'
+iplist=$(sed -n -e "$nP" /etc/hosts)
+
+#cat /tmp/arp-scan.output > "$tmpscan" 2>&1
+$ARPSCAN -l > "$tmpscan" 2>&1
+
+for a in $iplist ; do
+
+  aE=$(echo $a |sed -e 's/\./[.]/g')
+  aP='s/^'"$aE"'[ \t]\{1,\}\([0-9a-f]\{2\}:[0-9a-f]\{2\}:[0-9a-f]\{2\}:[0-9a-f]\{2\}:[0-9a-f]\{2\}:[0-9a-f]\{2\}\).*$/\1/p'
+  maclist=$(sed -n -e "$aP" "$tmpscan") 
+
+  for mac in $maclist ; do
+
+    echo ["$a"] ["$mac"] ["$(/bin/grep -e '^'$aE "$tmpscan")"] >> "$trace"
+
+    # append if not already exists
+    if ! /bin/grep -e '^'$aE "$database" >/dev/null 2>&1 ; then
+      echo $a $mac >> "$database"
+    fi
+    # compare with database
+    mac2=$(sed -n -e "$aP" "$database")
+    # alert if mismatch
+    if [ "$mac" != "$mac2" ]; then
+      echo "ARP mismatch for [$a]: [$mac] != [$mac2]" >> "$report"
+    fi
+
+  done
+
+done
+
+if [ -s "$report" ]; then
+  date=$(date)
+  ( \
+    echo "From: $MAILFROM"
+    echo "To: $MAILTO"
+    echo "Subject: ARP-Check Report [$date]"
+    echo
+    /bin/cat "$report"
+    echo
+    /bin/more "$tmpscan" "$trace" |/bin/cat
+  ) |tee "$mailcompose" |cat > /dev/null
+
+  /usr/sbin/sendmail -t -f"root@$hostname" < "$mailcompose"
+fi
+
+/bin/rm -f "$tmpscan" "$trace" "$report" "$mailcompose"

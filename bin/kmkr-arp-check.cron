@@ -1,0 +1,7 @@
+#
+# cron-jobs for munin
+#
+
+MAILTO=<<<mailto address>>>
+
+*/5 * * * *     root test -x /opt/kmkr-arp-check/bin/kmkr-arp-check && /opt/kmkr-arp-check/bin/kmkr-arp-check "<<<mailto address>>>"
